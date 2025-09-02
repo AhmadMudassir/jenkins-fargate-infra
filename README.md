@@ -1,148 +1,188 @@
-# 🚀 Terraform + ECS Fargate + Jenkins Master/Slave CI/CD Project
+# Terraform AWS Infrastructure with Jenkins and ECS
 
-This project provisions a **complete CI/CD environment** on AWS using
-**Terraform**.\
-It sets up the networking, Jenkins (master/slave), and an **ECS Fargate
-cluster** with an **Application Load Balancer (ALB)** to deploy
-containerized applications.\
-The CI/CD pipeline uses **Jenkins** to build and push Docker images to
-**Amazon ECR** and then deploys them to ECS.
+## 📖 Overview
+This project provisions a complete AWS environment using **Terraform**, including:
+- **VPC** with public subnets, internet gateway, and routing
+- **Security Groups** for HTTP, SSH, and Jenkins access
+- **EC2 Instances** for Jenkins Master and Slave
+- **ECR Repository** to store Docker images
+- **ECS Cluster (Fargate)** to run containerized workloads
+- **Application Load Balancer (ALB)** for ECS services
+- **CloudWatch Log Group** for ECS logging
 
-------------------------------------------------------------------------
+A **Jenkins pipeline** is used to build, push, and deploy a Node.js application from GitHub into ECS.
 
-## 📂 Project Overview
+---
 
-### Infrastructure Provisioned with Terraform
+## 📂 Project Structure
+```
+.
+├── main.tf
+├── modules
+│   ├── cloudwatch
+│   ├── ec2
+│   ├── ecs
+│   └── vpc
+├── terraform.tfvars
+├── terraform.tfstate
+└── variables.tf
+```
+### Modules
+- **modules/vpc** → VPC, subnets, IGW, route tables, security groups
+- **modules/ec2** → EC2 instances (Jenkins master and slave)
+- **modules/ecs** → ECS cluster, task definition, service, and ALB
+- **modules/cloudwatch** → Log group for ECS
+- **main.tf** → Root module combining everything
 
--   **VPC** -- Custom VPC with public/private subnets, route tables, and
-    internet/NAT gateways.\
--   **ECS (Fargate)** -- Cluster with task definitions and ECS services
-    for application deployment.\
--   **ALB** -- Application Load Balancer to expose ECS services.\
--   **ECR** -- Private registry to store Docker images built by
-    Jenkins.\
--   **EC2 (Jenkins Master & Slave)** -- EC2 instances provisioned for
-    Jenkins master and build slave agents.\
--   **IAM Roles & Policies** -- To allow Jenkins to push to ECR and
-    trigger ECS deployments.\
--   **CloudWatch Logs** -- Centralized logging for ECS tasks and
-    Jenkins.
+---
 
-<img width="1014" height="591" alt="jenkins-fargate-architect-dark" src="https://github.com/user-attachments/assets/fda1b71c-f12a-40d7-883a-ad89649c3769" />
+<img width="1014" height="591" alt="jenkins-fargate-architect-dark" src="https://github.com/user-attachments/assets/c09b08d0-c9aa-4589-a4f9-9c3652be20e7" />
 
+## ✅ Prerequisites
+- Terraform installed locally (`>=1.3` recommended)
+- AWS CLI installed and configured
+- Docker installed locally (to push images to ECR)
+- SSH key pair created in AWS (`key-ahmad` used here)
+- IAM role: `ecsTaskExecutionRole` with ECS/ECR/CloudWatch permissions
+- Jenkins plugins:
+  - Docker Pipeline
+  - Amazon ECR
+  - AWS Credentials
+  - Pipeline
 
-### Jenkins Setup
+---
 
--   **Master node** -- Runs Jenkins server with necessary plugins.\
--   **Slave node(s)** -- Auto-connected via SSH to handle builds and
-    Docker image creation.\
--   **ECR Authentication** -- Jenkins authenticates to ECR for pushing
-    images.\
--   **Pipeline** -- Automates build, push, and ECS deploy.
+## ⚡ Deployment Steps
 
-------------------------------------------------------------------------
+### 1️⃣ Clone this repository
+```bash
+git clone https://github.com/your-username/your-repo.git
+cd your-repo
+```
 
-## 🔄 CI/CD Workflow
+### 2️⃣ Initialize Terraform
+```bash
+terraform init
+```
 
-1.  **Code Push**\
-    Developer pushes code changes to the **main branch** of this
-    repository.
+### 3️⃣ Review variables
+Edit `terraform.tfvars` and `variables.tf` with your:
+- VPC CIDRs
+- AMI ID
+- Instance type
+- AWS region
 
-2.  **Jenkins Pipeline Triggered**
+### 4️⃣ Plan and Apply
+```bash
+terraform plan
+terraform apply -auto-approve
+```
 
-    -   Jenkins checks out this repo (`git` plugin points to this
-        repo).\
-    -   Builds a Docker image for the application.\
-    -   Tags the image with commit SHA or build number.
+This provisions:
+- Jenkins master (EC2)
+- Jenkins slave (EC2)
+- ECS Fargate cluster + service
+- ECR repository
+- ALB for ECS service
 
-3.  **Push to Amazon ECR**
+---
 
-    -   Jenkins logs in to ECR.\
-    -   Pushes the built image.
+## 🔧 Jenkins Setup
 
-4.  **Deploy to ECS Fargate**
+### Jenkins Master (EC2)
+- Connect via SSH to the **Jenkins Master** instance
+- Access Jenkins at `http://<Jenkins-Master-Public-IP>:8080`
+- Install recommended plugins
+- Create an **admin user**
 
-    -   ECS task definition is updated with the new image.\
-    -   ECS service performs rolling deployment via the ALB.
+### Jenkins Slave (EC2)
+- **Important:** The Jenkins slave does **not auto-connect** to the master
+- Go to **Manage Jenkins → Nodes → New Node**
+- Add a node (label: `linux-slave`) with the slave’s IP
+- Use SSH to connect Jenkins master → slave
 
-5.  **Accessible Application**
+### Credentials in Jenkins
+Add the following credentials in Jenkins:
+- **AWS Account ID** (`aws-account-id`) → String credential
+- **AWS Access/Secret Keys** (`aws-jenkins`) → AWS credential type
 
-    -   ALB DNS name provides access to the running app.
+---
 
-------------------------------------------------------------------------
+## 🛠 Jenkins Pipeline
 
-## 📌 Jenkins Pipeline Notes
+The pipeline will:
+1. Clone your **application repo**:  
+   👉 `https://github.com/AhmadMudassir/demo-node-app.git` (branch: `main`)
+2. Build a Docker image
+3. Push image to **ECR**
+4. Update ECS service with the new image
 
--   Jenkinsfile is configured to **use this repo directly**.\
--   Example Git checkout in pipeline:
-
-``` groovy
+### Sample Pipeline (`Jenkinsfile`)
+```groovy
 pipeline {
-    agent any
+    agent { label 'linux-slave' }
+
+    environment {
+        AWS_DEFAULT_REGION = "us-east-2"
+        CLUSTER_NAME = "ahmad-ecs-cluster-terra"
+        SERVICE_NAME = "ahmad-service-terra"
+        TASK_DEFINITION_NAME = "ahmad-taskdef-terra"
+        DESIRED_COUNT = "2"
+        IMAGE_REPO_NAME = "ahmad-repo-terra"
+        IMAGE_TAG = "${env.BUILD_ID}"
+        registryCredential = "aws-jenkins"
+    }
+
     stages {
-        stage('Checkout') {
+        stage('Checkout Code') {
             steps {
-                git branch: 'main', url: 'https://github.com/your-org/your-repo.git'
+                git branch: 'main', url: 'https://github.com/AhmadMudassir/demo-node-app.git'
             }
+        }
+
+        stage('Build and Push Image') {
+            steps {
+                withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
+                    script {
+                        def REPOSITORY_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
+                        dockerImage = docker.build("${IMAGE_REPO_NAME}:${IMAGE_TAG}")
+
+                        docker.withRegistry("https://${REPOSITORY_URI}", "ecr:${AWS_DEFAULT_REGION}:${registryCredential}") {
+                            dockerImage.push()
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to ECS') {
+            steps {
+                withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
+                    withAWS(credentials: registryCredential, region: "${AWS_DEFAULT_REGION}") {
+                        script {
+                            env.REPOSITORY_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
+                            sh 'chmod +x script.sh && ./script.sh'
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'docker system prune -a -f'
         }
     }
 }
 ```
 
-> Replace `your-org/your-repo.git` with the actual repo URL.\
-> This ensures the pipeline always pulls from **this project
-> repository**.
+---
 
-------------------------------------------------------------------------
+## 📝 Notes
+- Jenkins slave must be manually registered with the master.
+- The pipeline uses the `main` branch of [demo-node-app](https://github.com/AhmadMudassir/demo-node-app.git).
+- Make sure AWS credentials and Docker credentials are stored in Jenkins before running.
+- The ECS service will redeploy with the new image whenever the pipeline runs.
 
-## 📖 How to Use
-
-### 1️⃣ Clone the Repository
-
-``` bash
-git clone https://github.com/your-org/your-repo.git
-cd your-repo
-```
-
-### 2️⃣ Initialize Terraform
-
-``` bash
-terraform init
-```
-
-### 3️⃣ Apply Infrastructure
-
-``` bash
-terraform apply
-```
-
-This provisions VPC, ECS, ECR, Jenkins master/slave EC2 instances, and
-ALB.
-
-### 4️⃣ Configure Jenkins
-
--   Access Jenkins via the EC2 public IP.\
--   Install recommended plugins (`Pipeline`, `Git`, `ECS`, `ECR`).\
--   Configure Jenkins credentials for AWS (IAM user with permissions).
-
-### 5️⃣ Run the Pipeline
-
--   Push changes to the `main` branch.\
--   Jenkins triggers the pipeline and deploys to ECS automatically.
-
-------------------------------------------------------------------------
-
-## 🎯 Key Features
-
--   Fully automated AWS infrastructure with **Terraform**.\
--   Jenkins **master/slave** setup for distributed builds.\
--   CI/CD pipeline for Dockerized apps.\
--   **ECR + ECS Fargate + ALB** integration for seamless deployment.\
--   Logs and monitoring with **CloudWatch**.
-
-------------------------------------------------------------------------
-
-## 📜 License
-
-This project is licensed under the MIT License -- feel free to use and
-adapt it.
+---
